@@ -1,2 +1,0 @@
-mode=incremental device=cpu seed=0
-wrote runs/smoke\config.json
