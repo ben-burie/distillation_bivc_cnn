@@ -21,7 +21,7 @@ for mode in modes:
                 "--epochs", str(EPOCHS),
                 "--save-dir", f"runs/seed{seed}_mode{mode}_increment{increment}"
             ]
-            result = subprocess.run(command, capture_output=True, text=True)
+            result = subprocess.run(command)
 
             if result.returncode != 0:
                 print(f"Test {count} FAILED. Exiting all tests.")
