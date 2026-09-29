@@ -1,22 +1,20 @@
-"""The end-of-run spreadsheet.
-
-`metrics.json` is the machine-readable record; this is the one you open.  It holds the
-same numbers the summary logs, laid out as a table per sheet:
-
-  accuracy         one row per task -- accuracy over every class seen so far, and the
-                   triangular breakdown over each individual task
-  summary          final accuracy, average incremental accuracy, forgetting
-  bias correction  what stage 2 fitted at each task, and validation either side of it
-
-openpyxl is optional: without it the same three tables are written as CSV files
-alongside, so a run never fails for want of a spreadsheet library.
-"""
-
 import csv
 import logging
 import os
+from datetime import datetime
 
 log = logging.getLogger(__name__)
+
+# Columns every master-CSV row carries before the T1..Tn breakdown is appended.
+MASTER_COLUMNS = [
+    "timestamp", "run", "mode", "seed", "classes_per_task", "epochs",
+    "dataset", "arch", "loss", "bic_mode",
+    "task", "classes_added", "classes_seen", "seen_acc",
+    "bic_alpha", "bic_beta", "bic_b_new_mean", "bic_b_old_mean",
+    "val_before", "val_before_new", "val_before_old",
+    "val_after", "val_after_new", "val_after_old",
+    "final", "average_incremental", "forgetting",
+]
 
 
 def _accuracy_rows(results, tasks, name):
@@ -135,4 +133,105 @@ def write_report(results, save_dir, name="model", stem="accuracy"):
     path = os.path.join(save_dir, f"{stem}.xlsx")
     book.save(path)
     log.info("wrote %s", path)
+    return path
+
+
+def _bias_by_task(results):
+    """The stage-2 record for each task, keyed by task number.
+
+    Task 1 has no old classes and never runs stage 2, so it is simply absent; its row
+    gets blank calibration columns rather than zeros, which would read as a correction
+    that was fitted and came out null.
+    """
+    by_task = {}
+    for rec in results.get("bias_correction", []):
+        bias, num_old = rec.get("bias"), rec.get("num_old", 0)
+        new_mean = old_mean = None
+        if bias:
+            new_mean = sum(bias[num_old:]) / max(len(bias) - num_old, 1)
+            old_mean = sum(bias[:num_old]) / num_old if num_old else None
+        before, after = rec.get("val_before", {}), rec.get("val_after", {})
+        by_task[rec.get("task")] = [
+            rec.get("alpha"), rec.get("beta"), new_mean, old_mean,
+            before.get("acc"), before.get("new_acc"), before.get("old_acc"),
+            after.get("acc"), after.get("new_acc"), after.get("old_acc"),
+        ]
+    return by_task
+
+
+def master_rows(results, name="model", extra=None, max_tasks=None):
+    """One row per increment: the run's settings, that task's accuracy, the calibration
+    fitted at it, the run-level summary, and the T1..Tn breakdown.
+
+    `extra` supplies the sweep-level fields the results dict cannot know -- the
+    timestamp, the run tag, and the flag values the run was launched with.
+    """
+    extra = extra or {}
+    model = results[name]
+    per_task = model["per_task_accuracy"]
+    tasks = results.get("tasks", [])
+    width = max_tasks or max((len(row) for row in per_task), default=0)
+    by_task = _bias_by_task(results)
+
+    header = MASTER_COLUMNS + [f"T{i + 1}" for i in range(width)]
+    rows = []
+    for t, (acc, breakdown) in enumerate(zip(model["seen_accuracy"], per_task), start=1):
+        classes = tasks[t - 1] if t - 1 < len(tasks) else []
+        seen_count = sum(len(tasks[i]) for i in range(min(t, len(tasks))))
+        # Blank beyond the tasks that have arrived: a zero would read as a task that
+        # was evaluated and scored nothing.
+        padded = list(breakdown)[:width] + [None] * max(width - len(breakdown), 0)
+        rows.append([
+            extra.get("timestamp"), extra.get("run"), extra.get("mode"),
+            extra.get("seed"), extra.get("classes_per_task"), extra.get("epochs"),
+            results.get("dataset"), results.get("arch"), results.get("loss"),
+            results.get("bic_mode"),
+            t, " ".join(str(c) for c in classes), seen_count, acc,
+            *by_task.get(t, [None] * 10),
+            model["final"], model["average_incremental"], model["forgetting"],
+            *padded,
+        ])
+    return header, rows
+
+
+def append_master_csv(results, path, name="model", extra=None, max_tasks=None):
+    """Append this run's per-increment rows to a CSV shared across the whole sweep.
+
+    Appending per run rather than at the end means a sweep that dies on run 19 still
+    leaves the first 18 on disk.  If the file exists with a different header -- a sweep
+    whose --classes-per-task changed the T-column count, say -- the old file is renamed
+    aside rather than written into, since a CSV with two different header shapes in it
+    is worse than two files.
+    """
+    if name not in results:
+        log.debug("no metrics recorded for %r, nothing to append", name)
+        return None
+
+    header, rows = master_rows(results, name, extra, max_tasks)
+    if not rows:
+        return None
+
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+
+    write_header = True
+    if os.path.exists(path):
+        with open(path, encoding="utf-8", newline="") as fh:
+            existing = next(csv.reader(fh), None)
+        if existing == header:
+            write_header = False
+        else:
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            rotated = f"{os.path.splitext(path)[0]}.{stamp}.csv"
+            os.rename(path, rotated)
+            log.warning("%s had a different header; moved it to %s and started a new one",
+                        os.path.basename(path), os.path.basename(rotated))
+
+    with open(path, "a", encoding="utf-8", newline="") as fh:
+        writer = csv.writer(fh)
+        if write_header:
+            writer.writerow(header)
+        writer.writerows(rows)
+
+    log.info("appended %d rows to %s", len(rows), path)
     return path
