@@ -53,14 +53,19 @@ def worker_init_fn(worker_id):
     np.random.seed(seed)
 
 
-def save_checkpoint(model, save_dir, name):
-    """Write `model`'s weights to <save_dir>/<name>.pt; no-op without a dir."""
+def save_checkpoint(model, save_dir, name, **extra):
+    """Write `model`'s weights to <save_dir>/<name>.pt; no-op without a dir.
+
+    The incremental run reuses one filename across every task, so `extra` is how a
+    caller records which task the weights came from -- without it an overwritten
+    checkpoint says nothing about where in the run it was taken.
+    """
     if not save_dir:
         return None
     os.makedirs(save_dir, exist_ok=True)
     path = os.path.join(save_dir, f"{name}.pt")
     torch.save({"state_dict": model.state_dict(),
-                "num_classes": model.fc2.out_features}, path)
+                "num_classes": model.fc2.out_features, **extra}, path)
     log.debug("saved checkpoint %s", path)
     return path
 

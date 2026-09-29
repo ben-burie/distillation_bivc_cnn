@@ -13,8 +13,9 @@ The pipeline is split into single-purpose modules:
   evaluate         accuracy, the old/new breakdown, per-task evaluation
   memory           the replay exemplar memory
   metrics          accuracy bookkeeping and the end-of-run summary
+  report           the end-of-run spreadsheet
   experiments      the two top-level experiments (joint, incremental)
 """
 
 __all__ = ["bias_correction", "config", "data", "evaluate", "losses", "memory",
-           "metrics", "models", "splits", "train", "utils"]
+           "metrics", "models", "report", "splits", "train", "utils"]

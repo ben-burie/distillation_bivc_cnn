@@ -1,3 +1,4 @@
 *.md
 data
 runs
+*.pyc

@@ -26,6 +26,7 @@ from ..evaluate import evaluate, evaluate_old_new, evaluate_per_task, format_pct
 from ..memory import ExemplarMemory
 from ..metrics import IncrementalMetrics, log_summary
 from ..models import SimpleCNN, TeacherCNN, count_parameters, frozen_copy
+from ..report import write_report
 from ..splits import build_task_splits
 from ..train import train_model
 from ..utils import save_checkpoint, save_json
@@ -145,7 +146,10 @@ def run_incremental(args, device):
         metrics.record(MODEL, acc, per_task)
         log.info("  per-task: %s",
                  "  ".join(f"T{i+1}:{a:.1f}" for i, a in enumerate(per_task)))
-        save_checkpoint(model, args.save_dir, f"model_task{t+1}")
+        # One file, overwritten each task: twenty CIFAR-100 checkpoints is a lot of
+        # disk for a run whose interesting artefact is the accuracy table.
+        save_checkpoint(model, args.save_dir, "model", task=t + 1,
+                        classes_seen=list(seen_classes), bias_correction=record)
 
     log_summary(metrics)
     results = {"mode": "incremental", "dataset": args.dataset,
@@ -155,6 +159,7 @@ def run_incremental(args, device):
                "bias_correction": bic_records,
                **metrics.as_dict()}
     save_json(results, args.save_dir, "metrics")
+    write_report(results, args.save_dir, name=MODEL)
     return results
 
 
